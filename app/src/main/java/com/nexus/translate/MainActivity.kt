@@ -2,6 +2,7 @@ package com.nexus.translate
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
@@ -14,39 +15,65 @@ import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
     private val projectionManager by lazy { getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
+    private lateinit var prefs: SharedPreferences
     
     private var selectedLanguage = "Türkçe"
     private var selectedColor = "#FFFF00" 
+    private lateinit var apiKeyInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("NexusPrefs", Context.MODE_PRIVATE)
         
         val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#090D16")) // Derin Siber Siyah
-            setPadding(60, 60, 60, 60)
+            setBackgroundColor(Color.parseColor("#090D16")) // Arka plan Siber Siyah
+            setPadding(60, 40, 60, 40)
         }
 
         val titleText = TextView(this).apply {
             text = "NEXUS TRANSLATE"
             textSize = 26f
-            setTextColor(Color.parseColor("#38BDF8")) // Neon Mavi
+            setTextColor(Color.parseColor("#38BDF8")) 
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 60)
+            setPadding(0, 0, 0, 40)
         }
         mainLayout.addView(titleText)
 
-        // Dil Seçimi
+        // 1. API ANAHTARI GİRİŞ BÖLÜMÜ (Bembeyaz Kontrast)
+        mainLayout.addView(createLabel("Kişisel API Anahtarınız:"))
+        apiKeyInput = EditText(this).apply {
+            hint = "Gemini API Anahtarınızı Buraya Yapıştırın"
+            setText(prefs.getString("API_KEY", "")) // Eskiden kaydedileni hatırla
+            setBackgroundColor(Color.WHITE) // Zıtlık için beyaz arka plan
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.GRAY)
+            setPadding(30, 30, 30, 30)
+            textSize = 14f
+        }
+        mainLayout.addView(apiKeyInput)
+
+        // API Anahtarı Alma Linki
+        val getApiKeyText = TextView(this).apply {
+            text = "🔗 Ücretsiz API Anahtarı Almak İçin Tıklayın"
+            setTextColor(Color.parseColor("#38BDF8")) // Link rengi
+            textSize = 14f
+            setTypeface(null, Typeface.ITALIC)
+            setPadding(0, 10, 0, 40)
+            setOnClickListener {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/app/apikey")))
+            }
+        }
+        mainLayout.addView(getApiKeyText)
+
+        // 2. DİL SEÇİMİ (Bembeyaz Kontrast)
         mainLayout.addView(createLabel("Hedef Çeviri Dili:"))
-        val languages = arrayOf(
-            "Türkçe", "English", "Español", "中文", "हिन्दी", 
-            "العربية", "Português", "Русский", "Français", "Deutsch",
-            "日本語", "한국어", "Italiano", "Tiếng Việt", "Polski",
-            "Türkçe (Azerbaycan)", "Nederlands", "Svenska", "Dansk", "Suomi"
-        )
+        val languages = arrayOf("Türkçe", "English", "Español", "中文", "हिन्दी", "العربية", "Português", "Русский", "Français", "Deutsch", "日本語", "한국어")
         val langSpinner = Spinner(this).apply {
+            setBackgroundColor(Color.WHITE) // Zıtlık için beyaz
+            setPadding(10, 10, 10, 10)
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, languages)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, pos: Int, id: Long) {
@@ -57,11 +84,15 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(langSpinner)
 
-        // Neon Renk Seçimi
+        mainLayout.addView(Space(this).apply { minimumHeight = 30 })
+
+        // 3. RENK SEÇİMİ (Bembeyaz Kontrast)
         mainLayout.addView(createLabel("Çeviri Metin Rengi (Neon):"))
         val colorsName = arrayOf("Neon Sarı", "Saf Beyaz", "Matrix Yeşili", "Siber Mavi", "Neon Pembe", "Elektrik Moru", "Ateş Turuncusu")
         val colorsHex = arrayOf("#FFFF00", "#FFFFFF", "#00FF00", "#00FFFF", "#FF00FF", "#8A2BE2", "#FF5500")
         val colorSpinner = Spinner(this).apply {
+            setBackgroundColor(Color.WHITE) // Zıtlık için beyaz
+            setPadding(10, 10, 10, 10)
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, colorsName)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, pos: Int, id: Long) {
@@ -72,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(colorSpinner)
         
-        mainLayout.addView(Space(this).apply { minimumHeight = 80 })
+        mainLayout.addView(Space(this).apply { minimumHeight = 60 })
 
         // Başlat Butonu
         val startButton = Button(this).apply {
@@ -84,6 +115,15 @@ class MainActivity : AppCompatActivity() {
             setTypeface(null, Typeface.BOLD)
             
             setOnClickListener {
+                val currentKey = apiKeyInput.text.toString().trim()
+                if (currentKey.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Lütfen önce API Anahtarınızı girin!", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                
+                // Anahtarı telefonun hafızasına kaydet
+                prefs.edit().putString("API_KEY", currentKey).apply()
+
                 if (!Settings.canDrawOverlays(this@MainActivity)) {
                     Toast.makeText(context, "Lütfen 'Üste Gösterme' izni verin.", Toast.LENGTH_LONG).show()
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -100,8 +140,9 @@ class MainActivity : AppCompatActivity() {
         return TextView(this).apply {
             this.text = text
             textSize = 14f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 30, 0, 10)
+            setTextColor(Color.parseColor("#E2E8F0")) // Çok açık gri
+            setPadding(0, 15, 0, 5)
+            setTypeface(null, Typeface.BOLD)
         }
     }
 
@@ -112,6 +153,8 @@ class MainActivity : AppCompatActivity() {
                 putExtra("DATA", data)
                 putExtra("TARGET_LANG", selectedLanguage)
                 putExtra("TEXT_COLOR", selectedColor)
+                // Kaydettiğimiz anahtarı servise yolla
+                putExtra("API_KEY", prefs.getString("API_KEY", "")) 
             }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
