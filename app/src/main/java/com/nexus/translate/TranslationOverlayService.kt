@@ -30,6 +30,7 @@ class TranslationOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    @SuppressLint("ForegroundServiceType")
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -41,7 +42,13 @@ class TranslationOverlayService : Service() {
             .setContentText("Ekran çevirisi arka planda çalışıyor.")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
-        startForeground(1, notification)
+            
+        // Çökme Engelleyici: Android 14 (API 34) için zorunlu servis tipi belirtildi
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1, notification)
+        }
     }
 
     @SuppressLint("WrongConstant")
@@ -49,7 +56,6 @@ class TranslationOverlayService : Service() {
         val data = intent?.getParcelableExtra<Intent>("DATA") ?: return START_NOT_STICKY
         val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
         
-        // Kullanıcının arayüzden seçtiği ayarları al
         targetLanguage = intent.getStringExtra("TARGET_LANG") ?: "Türkçe"
         textColor = intent.getStringExtra("TEXT_COLOR") ?: "#FFFF00"
         
@@ -80,7 +86,6 @@ class TranslationOverlayService : Service() {
         if (rect == null) return
         scope.launch {
             try {
-                // Yapay zekaya seçilen dili söylüyoruz
                 val prompt = "Sen bir oyun ve uygulama çevirmenisin. Lütfen şu metni $targetLanguage diline oyun bağlamını koruyarak çevir: $text"
                 val translated = generativeModel.generateContent(prompt).text ?: ""
                 
@@ -91,9 +96,8 @@ class TranslationOverlayService : Service() {
                 
                 val textView = TextView(this@TranslationOverlayService).apply {
                     this.text = "($translated)"
-                    // Kullanıcının seçtiği neon rengi uyguluyoruz
                     setTextColor(Color.parseColor(textColor))
-                    setBackgroundColor(Color.parseColor("#99000000")) // Arka planı hafif koyulaştırdık (okunabilirlik için)
+                    setBackgroundColor(Color.parseColor("#99000000")) 
                     setPadding(6, 2, 6, 2)
                     setTypeface(null, Typeface.BOLD)
                 }
