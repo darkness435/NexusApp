@@ -43,7 +43,6 @@ class TranslationOverlayService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
             
-        // Çökme Engelleyici: Android 14 (API 34) için zorunlu servis tipi belirtildi
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
