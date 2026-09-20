@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.*
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
 import android.util.DisplayMetrics
@@ -21,18 +22,20 @@ import kotlinx.coroutines.*
 
 class TranslationOverlayService : Service() {
     private lateinit var windowManager: WindowManager
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    // İşlemleri arka plana aldık (Telefonun donmasını engeller)
+    private val scope = CoroutineScope(Dispatchers.IO + Job()) 
     
     private var generativeModel: GenerativeModel? = null
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
+    // ÇÖZÜM BURADA: Bu 3 motoru kalıcı hale getirdik. Artık sistem bunları 3 saniye sonra silemez!
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
+
     private var targetLanguage = "Türkçe"
     private var textColor = "#FFFF00"
     private var lastTranslateTime = 0L
-    
-    // RAM tasarrufu için ekranı %50 küçültüyoruz
-    private val scaleDownRatio = 0.5f 
-    private val multiplier = 2 // Çeviriyi ekrana çizerken gerçek boyuta döndürmek için
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -49,7 +52,6 @@ class TranslationOverlayService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
             
-        // Android 14 Çökme Engelleyici Kod:
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
@@ -71,79 +73,81 @@ class TranslationOverlayService : Service() {
         }
         
         val projManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val mediaProjection = projManager.getMediaProjection(resultCode, data)
+        mediaProjection = projManager.getMediaProjection(resultCode, data)
         
         val metrics = DisplayMetrics()
         windowManager.defaultDisplay.getRealMetrics(metrics)
         
-        // Cihazın bellek taşmasını önlemek için boyutları yarıya düşürüyoruz
-        val scaledWidth = (metrics.widthPixels * scaleDownRatio).toInt()
-        val scaledHeight = (metrics.heightPixels * scaleDownRatio).toInt()
+        // Motorlar kalıcı değişkenlere atandı
+        imageReader = ImageReader.newInstance(metrics.widthPixels, metrics.heightPixels, PixelFormat.RGBA_8888, 2)
         
-        val imageReader = ImageReader.newInstance(scaledWidth, scaledHeight, PixelFormat.RGBA_8888, 2)
-        mediaProjection.createVirtualDisplay("Capture", scaledWidth, scaledHeight, metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.surface, null, null)
+        virtualDisplay = mediaProjection?.createVirtualDisplay("Capture", 
+            metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader!!.surface, null, null)
 
-        imageReader.setOnImageAvailableListener({ reader ->
+        imageReader!!.setOnImageAvailableListener({ reader ->
             val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
             if (image == null) return@setOnImageAvailableListener
             
+            // Saniyede binlerce istek atıp kotayı bitirmesin diye 5 saniye bekleme kuralı
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastTranslateTime < 5000) { // Her 5 Saniyede Bir İşlem Yap (API Spam Koruması)
+            if (currentTime - lastTranslateTime < 5000) { 
                 image.close()
                 return@setOnImageAvailableListener
             }
             lastTranslateTime = currentTime
 
             try {
+                // Tek ekran / Tam ekran çökme sorunu dinamik genişlik ile çözüldü
+                val width = image.width
+                val height = image.height
                 val planes = image.planes
                 val buffer = planes[0].buffer
                 val pixelStride = planes[0].pixelStride
                 val rowStride = planes[0].rowStride
-                val rowPadding = rowStride - pixelStride * scaledWidth
+                val rowPadding = rowStride - pixelStride * width
                 
-                // Tam boyuttaki Bitmap'i oluştur (Padding dahil)
-                val fullBitmap = Bitmap.createBitmap(scaledWidth + rowPadding / pixelStride, scaledHeight, Bitmap.Config.ARGB_8888)
+                val fullBitmap = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
                 fullBitmap.copyPixelsFromBuffer(buffer)
-
-                // Bozuk/siyah çeviriyi engellemek için sadece saf ekran görüntüsünü (Padding hariç) kesip alıyoruz
-                val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, scaledWidth, scaledHeight)
+                val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, width, height)
 
                 recognizer.process(InputImage.fromBitmap(cleanBitmap, 0)).addOnSuccessListener { visionText ->
-                    for (block in visionText.textBlocks) {
-                        if (block.text.length > 2) { // 2 harften küçük çerçöp yazıları çevirme
-                            translateAndDraw(block.text, block.boundingBox)
-                            break 
+                    scope.launch {
+                        for (block in visionText.textBlocks) {
+                            if (block.text.length > 2) { 
+                                translateAndDraw(block.text, block.boundingBox)
+                                break 
+                            }
                         }
                     }
                 }
             } catch (e: Exception) {
             } finally {
-                image.close() // Bellek sızıntısını önler
+                image.close() 
             }
         }, null)
         
         return START_STICKY
     }
 
-    private fun translateAndDraw(text: String, rect: Rect?) {
+    private suspend fun translateAndDraw(text: String, rect: Rect?) {
         if (rect == null) return
         val model = generativeModel ?: return
         
-        scope.launch {
-            try {
-                val prompt = "Sen bir oyun çevirmenisin. Bu metni $targetLanguage diline kısa ve net şekilde çevir: $text"
-                val response = model.generateContent(prompt)
-                val translated = response.text ?: return@launch
-                
+        try {
+            val prompt = "Sen profesyonel bir çevirmensin. Şu oyun içi/uygulama metnini anında $targetLanguage diline çevir. (Sadece çeviriyi yaz, açıklama yapma): $text"
+            val response = model.generateContent(prompt)
+            val translated = response.text ?: return
+            
+            // Ekrana yazdırma işlemi için Ana Ekrana (Main Thread) dönüyoruz
+            withContext(Dispatchers.Main) {
                 val params = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
                 ).apply { 
                     gravity = Gravity.TOP or Gravity.START 
-                    // Görüntüyü %50 küçülttüğümüz için, koordinatları 2 ile çarpıp ekrandaki gerçek yerine koyuyoruz
-                    x = (rect.left * multiplier).coerceAtLeast(20)
-                    y = (rect.bottom * multiplier).coerceAtLeast(20)
+                    x = rect.left.coerceAtLeast(20)
+                    y = rect.bottom.coerceAtLeast(20)
                 }
                 
                 val textView = TextView(this@TranslationOverlayService).apply {
@@ -156,10 +160,17 @@ class TranslationOverlayService : Service() {
                 }
                 
                 windowManager.addView(textView, params)
-                delay(4000) 
+                delay(4500) // Çeviri ekranda 4.5 saniye kalıp kaybolur
                 windowManager.removeView(textView)
-            } catch (e: Exception) {
             }
+        } catch (e: Exception) {
         }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        virtualDisplay?.release()
+        mediaProjection?.stop()
+        imageReader?.close()
     }
 }
