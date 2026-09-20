@@ -8,7 +8,9 @@ jobs:
     - uses: actions/setup-java@v5
       with: { distribution: 'zulu', java-version: '17' }
     - uses: gradle/actions/setup-gradle@v4
-    - run: gradle assembleDebug --info
+      with:
+        gradle-version: '8.4'
+    - run: gradle assembleDebug
     - uses: actions/upload-artifact@v4
       with:
         name: NexusTranslate-Uygulama
