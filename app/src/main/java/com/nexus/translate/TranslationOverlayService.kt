@@ -3,6 +3,7 @@ package com.nexus.translate
 import android.annotation.SuppressLint
 import android.app.*
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.*
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
@@ -22,13 +23,16 @@ class TranslationOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     
-    // Artık sabit anahtar yok, dinamik olarak oluşturacağız
     private var generativeModel: GenerativeModel? = null
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     private var targetLanguage = "Türkçe"
     private var textColor = "#FFFF00"
     private var lastTranslateTime = 0L
+    
+    // RAM tasarrufu için ekranı %50 küçültüyoruz
+    private val scaleDownRatio = 0.5f 
+    private val multiplier = 2 // Çeviriyi ekrana çizerken gerçek boyuta döndürmek için
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -45,8 +49,9 @@ class TranslationOverlayService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
             
+        // Android 14 Çökme Engelleyici Kod:
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(1, notification)
         }
@@ -57,12 +62,10 @@ class TranslationOverlayService : Service() {
         val data = intent?.getParcelableExtra<Intent>("DATA") ?: return START_NOT_STICKY
         val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
         
-        // Arayüzden gelen kullanıcı ayarlarını al
         targetLanguage = intent.getStringExtra("TARGET_LANG") ?: "Türkçe"
         textColor = intent.getStringExtra("TEXT_COLOR") ?: "#FFFF00"
         val userApiKey = intent.getStringExtra("API_KEY") ?: ""
 
-        // Yapay zekayı kullanıcının kendi anahtarıyla başlat
         if (userApiKey.isNotEmpty()) {
             generativeModel = GenerativeModel(modelName = "gemini-pro", apiKey = userApiKey)
         }
@@ -73,15 +76,20 @@ class TranslationOverlayService : Service() {
         val metrics = DisplayMetrics()
         windowManager.defaultDisplay.getRealMetrics(metrics)
         
-        val imageReader = ImageReader.newInstance(metrics.widthPixels, metrics.heightPixels, PixelFormat.RGBA_8888, 2)
-        mediaProjection.createVirtualDisplay("Capture", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
+        // Cihazın bellek taşmasını önlemek için boyutları yarıya düşürüyoruz
+        val scaledWidth = (metrics.widthPixels * scaleDownRatio).toInt()
+        val scaledHeight = (metrics.heightPixels * scaleDownRatio).toInt()
+        
+        val imageReader = ImageReader.newInstance(scaledWidth, scaledHeight, PixelFormat.RGBA_8888, 2)
+        mediaProjection.createVirtualDisplay("Capture", scaledWidth, scaledHeight, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.surface, null, null)
 
         imageReader.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+            if (image == null) return@setOnImageAvailableListener
             
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastTranslateTime < 6000) {
+            if (currentTime - lastTranslateTime < 5000) { // Her 5 Saniyede Bir İşlem Yap (API Spam Koruması)
                 image.close()
                 return@setOnImageAvailableListener
             }
@@ -92,14 +100,18 @@ class TranslationOverlayService : Service() {
                 val buffer = planes[0].buffer
                 val pixelStride = planes[0].pixelStride
                 val rowStride = planes[0].rowStride
-                val rowPadding = rowStride - pixelStride * image.width
+                val rowPadding = rowStride - pixelStride * scaledWidth
                 
-                val bitmap = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
-                bitmap.copyPixelsFromBuffer(buffer)
+                // Tam boyuttaki Bitmap'i oluştur (Padding dahil)
+                val fullBitmap = Bitmap.createBitmap(scaledWidth + rowPadding / pixelStride, scaledHeight, Bitmap.Config.ARGB_8888)
+                fullBitmap.copyPixelsFromBuffer(buffer)
 
-                recognizer.process(InputImage.fromBitmap(bitmap, 0)).addOnSuccessListener { visionText ->
+                // Bozuk/siyah çeviriyi engellemek için sadece saf ekran görüntüsünü (Padding hariç) kesip alıyoruz
+                val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, scaledWidth, scaledHeight)
+
+                recognizer.process(InputImage.fromBitmap(cleanBitmap, 0)).addOnSuccessListener { visionText ->
                     for (block in visionText.textBlocks) {
-                        if (block.text.isNotBlank()) {
+                        if (block.text.length > 2) { // 2 harften küçük çerçöp yazıları çevirme
                             translateAndDraw(block.text, block.boundingBox)
                             break 
                         }
@@ -107,7 +119,7 @@ class TranslationOverlayService : Service() {
                 }
             } catch (e: Exception) {
             } finally {
-                image.close()
+                image.close() // Bellek sızıntısını önler
             }
         }, null)
         
@@ -116,7 +128,7 @@ class TranslationOverlayService : Service() {
 
     private fun translateAndDraw(text: String, rect: Rect?) {
         if (rect == null) return
-        val model = generativeModel ?: return // Anahtar yoksa iptal et
+        val model = generativeModel ?: return
         
         scope.launch {
             try {
@@ -129,17 +141,18 @@ class TranslationOverlayService : Service() {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
                 ).apply { 
                     gravity = Gravity.TOP or Gravity.START 
-                    x = rect.left.coerceAtLeast(20)
-                    y = rect.bottom.coerceAtLeast(20)
+                    // Görüntüyü %50 küçülttüğümüz için, koordinatları 2 ile çarpıp ekrandaki gerçek yerine koyuyoruz
+                    x = (rect.left * multiplier).coerceAtLeast(20)
+                    y = (rect.bottom * multiplier).coerceAtLeast(20)
                 }
                 
                 val textView = TextView(this@TranslationOverlayService).apply {
                     this.text = " $translated "
                     setTextColor(Color.parseColor(textColor))
-                    setBackgroundColor(Color.parseColor("#CC000000")) 
-                    setPadding(12, 6, 12, 6)
+                    setBackgroundColor(Color.parseColor("#E6000000")) 
+                    setPadding(16, 8, 16, 8)
                     setTypeface(null, Typeface.BOLD)
-                    textSize = 14f
+                    textSize = 15f
                 }
                 
                 windowManager.addView(textView, params)
