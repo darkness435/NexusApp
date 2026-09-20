@@ -1,5 +1,6 @@
 package com.nexus.translate
 
+import android.app.Activity // AppCompatActivity yerine saf Activity kullanıyoruz
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -11,9 +12,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.widget.*
-import androidx.appcompat.app.AppCompatActivity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çevrildi
     private val projectionManager by lazy { getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
     private lateinit var prefs: SharedPreferences
     
@@ -153,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(serviceIntent)
             }
-            finish() // Uygulamayı arka plana atıp oyuna geçişi kolaylaştırır
+            finish() 
         }
         super.onActivityResult(requestCode, resultCode, data)
     }
