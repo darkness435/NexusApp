@@ -9,6 +9,8 @@ import android.hardware.display.DisplayManager
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.util.DisplayMetrics
 import android.view.Gravity
@@ -22,16 +24,18 @@ import kotlinx.coroutines.*
 
 class TranslationOverlayService : Service() {
     private lateinit var windowManager: WindowManager
-    // İşlemleri arka plana aldık (Telefonun donmasını engeller)
     private val scope = CoroutineScope(Dispatchers.IO + Job()) 
     
     private var generativeModel: GenerativeModel? = null
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-    // ÇÖZÜM BURADA: Bu 3 motoru kalıcı hale getirdik. Artık sistem bunları 3 saniye sonra silemez!
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    
+    // ANR (Çökme) sorununu kökünden çözen Arka Plan İşlemcisi
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
 
     private var targetLanguage = "Türkçe"
     private var textColor = "#FFFF00"
@@ -43,6 +47,11 @@ class TranslationOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        
+        // İşletim sisteminin uygulamanın fişini çekmesini engelleyen Arka Plan Motorunu çalıştırıyoruz
+        backgroundThread = HandlerThread("ScreenCaptureThread").apply { start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+
         val channel = NotificationChannel("nexus", "Nexus", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         
@@ -78,18 +87,17 @@ class TranslationOverlayService : Service() {
         val metrics = DisplayMetrics()
         windowManager.defaultDisplay.getRealMetrics(metrics)
         
-        // Motorlar kalıcı değişkenlere atandı
         imageReader = ImageReader.newInstance(metrics.widthPixels, metrics.heightPixels, PixelFormat.RGBA_8888, 2)
         
         virtualDisplay = mediaProjection?.createVirtualDisplay("Capture", 
             metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader!!.surface, null, null)
 
+        // DİKKAT: Artık okuma işlemi ana ekranda değil, backgroundHandler (arka plan) üzerinden yapılıyor!
         imageReader!!.setOnImageAvailableListener({ reader ->
             val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
             if (image == null) return@setOnImageAvailableListener
             
-            // Saniyede binlerce istek atıp kotayı bitirmesin diye 5 saniye bekleme kuralı
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTranslateTime < 5000) { 
                 image.close()
@@ -98,7 +106,6 @@ class TranslationOverlayService : Service() {
             lastTranslateTime = currentTime
 
             try {
-                // Tek ekran / Tam ekran çökme sorunu dinamik genişlik ile çözüldü
                 val width = image.width
                 val height = image.height
                 val planes = image.planes
@@ -125,7 +132,7 @@ class TranslationOverlayService : Service() {
             } finally {
                 image.close() 
             }
-        }, null)
+        }, backgroundHandler)
         
         return START_STICKY
     }
@@ -135,11 +142,10 @@ class TranslationOverlayService : Service() {
         val model = generativeModel ?: return
         
         try {
-            val prompt = "Sen profesyonel bir çevirmensin. Şu oyun içi/uygulama metnini anında $targetLanguage diline çevir. (Sadece çeviriyi yaz, açıklama yapma): $text"
+            val prompt = "Sen oyun çevirmenisin. Metni $targetLanguage diline çevir. (Sadece çeviriyi yaz): $text"
             val response = model.generateContent(prompt)
             val translated = response.text ?: return
             
-            // Ekrana yazdırma işlemi için Ana Ekrana (Main Thread) dönüyoruz
             withContext(Dispatchers.Main) {
                 val params = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
@@ -160,7 +166,7 @@ class TranslationOverlayService : Service() {
                 }
                 
                 windowManager.addView(textView, params)
-                delay(4500) // Çeviri ekranda 4.5 saniye kalıp kaybolur
+                delay(4500) 
                 windowManager.removeView(textView)
             }
         } catch (e: Exception) {
@@ -172,5 +178,6 @@ class TranslationOverlayService : Service() {
         virtualDisplay?.release()
         mediaProjection?.stop()
         imageReader?.close()
+        backgroundThread?.quitSafely()
     }
 }
