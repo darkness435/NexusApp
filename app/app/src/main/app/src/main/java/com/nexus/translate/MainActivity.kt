@@ -1,6 +1,5 @@
 package com.nexus.translate
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -11,12 +10,13 @@ import android.provider.Settings
 import android.view.Gravity
 import android.widget.*
 import android.graphics.Typeface
+import androidx.appcompat.app.AppCompatActivity
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
     private val projectionManager by lazy { getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
     
     private var selectedLanguage = "Türkçe"
-    private var selectedColor = "#FFFF00" // Varsayılan: Neon Sarı
+    private var selectedColor = "#FFFF00" 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,14 +38,8 @@ class MainActivity : Activity() {
         }
         mainLayout.addView(titleText)
 
-        // 1. DİL SEÇİMİ (20 Dünya Dili)
         val langLabel = createLabel("Hedef Çeviri Dili:")
-        val languages = arrayOf(
-            "Türkçe", "English", "Español", "中文 (Chinese)", "हिन्दी (Hindi)", 
-            "العربية (Arabic)", "Português", "Bengali", "Русский (Russian)", "Français",
-            "Urdu", "Indonesian", "Deutsch (German)", "日本語 (Japanese)", "Marathi", 
-            "Telugu", "Türkçe (Azerbaycan)", "Italiano", "한국어 (Korean)", "Tiếng Việt"
-        )
+        val languages = arrayOf("Türkçe", "English", "Español", "中文", "العربية", "Русский", "Français", "Deutsch", "日本語", "한국어")
         val langSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, languages)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -58,16 +52,9 @@ class MainActivity : Activity() {
         mainLayout.addView(langLabel)
         mainLayout.addView(langSpinner)
 
-        // 2. GENİŞLETİLMİŞ NEON RENK PALETİ
         val colorLabel = createLabel("Çeviri Metni Rengi:")
-        val colorsName = arrayOf(
-            "Neon Sarı", "Saf Beyaz", "Matrix Yeşili", "Siber Mavi", 
-            "Neon Pembe", "Elektrik Moru", "Ateş Turuncusu", "Kan Kırmızı"
-        )
-        val colorsHex = arrayOf(
-            "#FFFF00", "#FFFFFF", "#00FF00", "#00FFFF", 
-            "#FF00FF", "#8A2BE2", "#FF5500", "#FF0033"
-        )
+        val colorsName = arrayOf("Neon Sarı", "Saf Beyaz", "Matrix Yeşili", "Siber Mavi", "Neon Pembe", "Elektrik Moru", "Ateş Turuncusu")
+        val colorsHex = arrayOf("#FFFF00", "#FFFFFF", "#00FF00", "#00FFFF", "#FF00FF", "#8A2BE2", "#FF5500")
         val colorSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, colorsName)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -82,7 +69,6 @@ class MainActivity : Activity() {
         
         mainLayout.addView(Space(this).apply { minimumHeight = 100 })
 
-        // 3. BAŞLATMA BUTONU
         val startButton = Button(this).apply {
             text = "ÇEVİRİ MOTORUNU BAŞLAT"
             setTextColor(Color.WHITE)
@@ -121,7 +107,11 @@ class MainActivity : Activity() {
                 putExtra("TARGET_LANG", selectedLanguage)
                 putExtra("TEXT_COLOR", selectedColor)
             }
-            startForegroundService(serviceIntent)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
             finish()
         }
         super.onActivityResult(requestCode, resultCode, data)
