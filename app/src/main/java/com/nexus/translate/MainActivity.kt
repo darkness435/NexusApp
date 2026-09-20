@@ -1,6 +1,6 @@
 package com.nexus.translate
 
-import android.app.Activity // AppCompatActivity yerine saf Activity kullanıyoruz
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -11,9 +11,11 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 
-class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çevrildi
+class MainActivity : Activity() {
     private val projectionManager by lazy { getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
     private lateinit var prefs: SharedPreferences
     
@@ -44,10 +46,10 @@ class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çev
 
         mainLayout.addView(createLabel("Kişisel API Anahtarınız:"))
         apiKeyInput = EditText(this).apply {
-            hint = "Gemini API Anahtarı"
+            hint = "Gemini API Anahtarını Yapıştırın"
             setText(prefs.getString("API_KEY", "")) 
-            setBackgroundColor(Color.WHITE) 
-            setTextColor(Color.BLACK)
+            setBackgroundColor(Color.parseColor("#1E293B")) // Şık koyu arka plan
+            setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             setPadding(30, 30, 30, 30)
             textSize = 14f
@@ -69,11 +71,10 @@ class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çev
         mainLayout.addView(createLabel("Hedef Çeviri Dili:"))
         val languages = arrayOf("Türkçe", "English", "Español", "中文", "हिन्दी", "العربية", "Português", "Русский", "Français", "Deutsch", "日本語", "한국어")
         val langSpinner = Spinner(this).apply {
-            setBackgroundColor(Color.WHITE) 
             setPadding(10, 10, 10, 10)
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, languages)
+            adapter = createCustomAdapter(languages)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, pos: Int, id: Long) {
+                override fun onItemSelected(parent: AdapterView<*>, view: View?, pos: Int, id: Long) {
                     selectedLanguage = languages[pos]
                 }
                 override fun onNothingSelected(parent: AdapterView<*>) {}
@@ -87,11 +88,10 @@ class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çev
         val colorsName = arrayOf("Neon Sarı", "Saf Beyaz", "Matrix Yeşili", "Siber Mavi", "Neon Pembe", "Elektrik Moru", "Ateş Turuncusu")
         val colorsHex = arrayOf("#FFFF00", "#FFFFFF", "#00FF00", "#00FFFF", "#FF00FF", "#8A2BE2", "#FF5500")
         val colorSpinner = Spinner(this).apply {
-            setBackgroundColor(Color.WHITE) 
             setPadding(10, 10, 10, 10)
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, colorsName)
+            adapter = createCustomAdapter(colorsName)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, pos: Int, id: Long) {
+                override fun onItemSelected(parent: AdapterView<*>, view: View?, pos: Int, id: Long) {
                     selectedColor = colorsHex[pos]
                 }
                 override fun onNothingSelected(parent: AdapterView<*>) {}
@@ -136,6 +136,23 @@ class MainActivity : Activity() { // Çökmemesi için Activity sınıfına çev
             setTextColor(Color.parseColor("#E2E8F0")) 
             setPadding(0, 15, 0, 5)
             setTypeface(null, Typeface.BOLD)
+        }
+    }
+
+    // Arayüzü bozulmayan, mükemmel okunaklı özel Spinner Tasarımı
+    private fun createCustomAdapter(items: Array<String>): ArrayAdapter<String> {
+        return object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, items) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val view = super.getView(position, convertView, parent) as TextView
+                view.setTextColor(Color.WHITE)
+                return view
+            }
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val view = super.getDropDownView(position, convertView, parent) as TextView
+                view.setTextColor(Color.WHITE)
+                view.setBackgroundColor(Color.parseColor("#1E293B"))
+                return view
+            }
         }
     }
 
