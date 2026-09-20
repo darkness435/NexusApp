@@ -12,7 +12,6 @@ import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
-import androidx.core.app.NotificationCompat
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -23,9 +22,11 @@ class TranslationOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     
-    // NOT: Buraya kendi Gemini API Anahtarını yazmalısın
     private val generativeModel = GenerativeModel(modelName = "gemini-pro", apiKey = "SENIN_API_ANAHTARIN_BURAYA")
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+    private var targetLanguage = "Türkçe"
+    private var textColor = "#FFFF00"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -34,13 +35,23 @@ class TranslationOverlayService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val channel = NotificationChannel("nexus", "Nexus", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        startForeground(1, NotificationCompat.Builder(this, "nexus").setContentTitle("Nexus Çalışıyor").build())
+        
+        val notification = Notification.Builder(this, "nexus")
+            .setContentTitle("Nexus Çeviri Aktif")
+            .setContentText("Ekran çevirisi arka planda çalışıyor.")
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .build()
+        startForeground(1, notification)
     }
 
     @SuppressLint("WrongConstant")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val data = intent?.getParcelableExtra<Intent>("DATA") ?: return START_NOT_STICKY
         val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
+        
+        // Kullanıcının arayüzden seçtiği ayarları al
+        targetLanguage = intent.getStringExtra("TARGET_LANG") ?: "Türkçe"
+        textColor = intent.getStringExtra("TEXT_COLOR") ?: "#FFFF00"
         
         val projManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val mediaProjection = projManager.getMediaProjection(resultCode, data)
@@ -69,7 +80,10 @@ class TranslationOverlayService : Service() {
         if (rect == null) return
         scope.launch {
             try {
-                val translated = generativeModel.generateContent("Bunu Türkçeye çevir: $text").text ?: ""
+                // Yapay zekaya seçilen dili söylüyoruz
+                val prompt = "Sen bir oyun ve uygulama çevirmenisin. Lütfen şu metni $targetLanguage diline oyun bağlamını koruyarak çevir: $text"
+                val translated = generativeModel.generateContent(prompt).text ?: ""
+                
                 val params = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
@@ -77,11 +91,14 @@ class TranslationOverlayService : Service() {
                 
                 val textView = TextView(this@TranslationOverlayService).apply {
                     this.text = "($translated)"
-                    setTextColor(Color.YELLOW)
-                    setBackgroundColor(Color.parseColor("#80000000"))
+                    // Kullanıcının seçtiği neon rengi uyguluyoruz
+                    setTextColor(Color.parseColor(textColor))
+                    setBackgroundColor(Color.parseColor("#99000000")) // Arka planı hafif koyulaştırdık (okunabilirlik için)
+                    setPadding(6, 2, 6, 2)
+                    setTypeface(null, Typeface.BOLD)
                 }
                 windowManager.addView(textView, params)
-                delay(3000)
+                delay(3500)
                 windowManager.removeView(textView)
             } catch (e: Exception) {}
         }
