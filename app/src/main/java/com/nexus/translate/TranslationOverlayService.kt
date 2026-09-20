@@ -19,6 +19,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.widget.Toast
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -36,15 +37,19 @@ class TranslationOverlayService : Service() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     
-    // Yüzer buton için
     private var floatingButtonLayout: FrameLayout? = null
-    
     private var targetLanguage = "Türkçe"
     private var textColor = "#FFFF00"
-    
     private var isTranslating = false
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // Ekrana bilgi vermek için yardımcı fonksiyon (Röntgen Modu)
+    private fun showToast(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     @SuppressLint("ForegroundServiceType")
     override fun onCreate() {
@@ -56,7 +61,7 @@ class TranslationOverlayService : Service() {
         
         val notification = Notification.Builder(this, "nexus")
             .setContentTitle("Nexus Çeviri Hazır")
-            .setContentText("Ekranda çeviri yapmak için yüzer butona basın.")
+            .setContentText("Ekranda çeviri yapmak için T butonuna basın.")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .build()
             
@@ -66,7 +71,6 @@ class TranslationOverlayService : Service() {
             startForeground(1, notification)
         }
         
-        // Yüzer butonu ekrana ekle
         createFloatingButton()
     }
 
@@ -80,13 +84,15 @@ class TranslationOverlayService : Service() {
         val userApiKey = intent.getStringExtra("API_KEY") ?: ""
 
         if (userApiKey.isNotEmpty()) {
-            generativeModel = GenerativeModel(modelName = "gemini-pro", apiKey = userApiKey)
+            // gemini-pro yerine daha hızlı ve güncel olan 1.5-flash modeline geçtik
+            generativeModel = GenerativeModel(modelName = "gemini-1.5-flash", apiKey = userApiKey)
+        } else {
+            showToast("Uyarı: API Anahtarı eksik!")
         }
         
         val projManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = projManager.getMediaProjection(resultCode, data)
         
-        // Artık VirtualDisplay'i sürekli açık tutmuyoruz, sadece butona basılınca kuracağız.
         return START_STICKY
     }
 
@@ -116,7 +122,6 @@ class TranslationOverlayService : Service() {
             y = 200
         }
 
-        // Butonu ekranda sürükleyebilmek için
         button.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
@@ -139,12 +144,11 @@ class TranslationOverlayService : Service() {
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
-                        // Eğer çok sürüklenmediyse, tıklama (Click) olarak algıla
-                        val Xdiff = (event.rawX - initialTouchX).toInt()
-                        val Ydiff = (event.rawY - initialTouchY).toInt()
-                        if (Xdiff < 10 && Ydiff < 10) {
+                        val Xdiff = Math.abs(event.rawX - initialTouchX)
+                        val Ydiff = Math.abs(event.rawY - initialTouchY)
+                        if (Xdiff < 15 && Ydiff < 15) {
                             if (!isTranslating) {
-                                button.text = "..." // Çevriliyor efekti
+                                button.text = "..."
                                 button.setBackgroundColor(Color.GRAY)
                                 captureAndTranslate(button)
                             }
@@ -159,9 +163,12 @@ class TranslationOverlayService : Service() {
         windowManager.addView(floatingButtonLayout, params)
     }
 
-    // Yalnızca butona basıldığında ÇALIŞAN, ram dostu tek seferlik ekran yakalama
     private fun captureAndTranslate(button: TextView) {
-        if (mediaProjection == null) return
+        if (mediaProjection == null) {
+            showToast("Hata: Ekran izni bulunamadı!")
+            resetButton(button)
+            return
+        }
         isTranslating = true
 
         val metrics = DisplayMetrics()
@@ -174,11 +181,13 @@ class TranslationOverlayService : Service() {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader!!.surface, null, null)
 
         imageReader!!.setOnImageAvailableListener({ reader ->
-            // Görüntüyü bir kez al ve döngüyü hemen kapat! (OOM Koruması)
             val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
-            if (image == null) return@setOnImageAvailableListener
+            if (image == null) {
+                showToast("Hata: Ekran görüntüsü alınamadı!")
+                resetButton(button)
+                return@setOnImageAvailableListener
+            }
             
-            // Okuyucuyu anında durdur, böylece tampon(buffer) dolmaz
             virtualDisplay?.release()
             virtualDisplay = null
             reader.setOnImageAvailableListener(null, null)
@@ -196,35 +205,34 @@ class TranslationOverlayService : Service() {
                 fullBitmap.copyPixelsFromBuffer(buffer)
                 val cleanBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, width, height)
 
-                // Bitmap'i analiz et
-                recognizer.process(InputImage.fromBitmap(cleanBitmap, 0)).addOnSuccessListener { visionText ->
-                    scope.launch {
-                        for (block in visionText.textBlocks) {
-                            if (block.text.length > 2) { 
-                                translateAndDraw(block.text, block.boundingBox)
-                                // İstiyorsan buradaki break'i kaldırarak ekrandaki TÜM metinleri çevirebilirsin.
-                                break 
-                            }
+                recognizer.process(InputImage.fromBitmap(cleanBitmap, 0))
+                    .addOnSuccessListener { visionText ->
+                        if (visionText.textBlocks.isEmpty()) {
+                            showToast("Ekranda çevrilecek metin bulunamadı.")
+                            resetButton(button)
+                            return@addOnSuccessListener
                         }
                         
-                        // İşlem bitince butonu eski haline getir
-                        withContext(Dispatchers.Main) {
-                            button.text = "T"
-                            button.setBackgroundColor(Color.parseColor("#38BDF8"))
-                            isTranslating = false
-                            imageReader?.close()
+                        showToast("Metin okundu, çevriliyor...")
+                        
+                        scope.launch {
+                            for (block in visionText.textBlocks) {
+                                if (block.text.length > 2) { 
+                                    translateAndDraw(block.text, block.boundingBox)
+                                    break // İlk bulduğu metni çevirip bitirir
+                                }
+                            }
+                            withContext(Dispatchers.Main) { resetButton(button) }
                         }
                     }
-                }.addOnFailureListener {
-                    // Hata olursa butonu sıfırla
-                    button.text = "T"
-                    button.setBackgroundColor(Color.parseColor("#38BDF8"))
-                    isTranslating = false
-                    imageReader?.close()
-                }
+                    .addOnFailureListener { e ->
+                        showToast("Yazı Okuma Hatası: ${e.localizedMessage}")
+                        resetButton(button)
+                    }
+
             } catch (e: Exception) {
-                isTranslating = false
-                imageReader?.close()
+                showToast("Görüntü İşleme Hatası: ${e.localizedMessage}")
+                resetButton(button)
             } finally {
                 image.close() 
             }
@@ -233,10 +241,14 @@ class TranslationOverlayService : Service() {
 
     private suspend fun translateAndDraw(text: String, rect: Rect?) {
         if (rect == null) return
-        val model = generativeModel ?: return
+        val model = generativeModel
+        if (model == null) {
+            withContext(Dispatchers.Main) { showToast("API Anahtarı girilmemiş!") }
+            return
+        }
         
         try {
-            val prompt = "Sen oyun çevirmenisin. Metni $targetLanguage diline çevir. (Sadece çeviriyi yaz): $text"
+            val prompt = "Sen bir çevirmensin. Sadece çeviriyi yaz, açıklama yapma. Şunu $targetLanguage diline çevir: $text"
             val response = model.generateContent(prompt)
             val translated = response.text ?: return
             
@@ -264,7 +276,17 @@ class TranslationOverlayService : Service() {
                 windowManager.removeView(textView)
             }
         } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                showToast("Yapay Zeka Hatası: ${e.localizedMessage}")
+            }
         }
+    }
+    
+    private fun resetButton(button: TextView) {
+        button.text = "T"
+        button.setBackgroundColor(Color.parseColor("#38BDF8"))
+        isTranslating = false
+        imageReader?.close()
     }
     
     override fun onDestroy() {
